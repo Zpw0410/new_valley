@@ -9,7 +9,7 @@ from tqdm import tqdm  # 进度条库
 # ================= 固定路径 =================
 SWW_FILE = r'd:/new_valley/DEM_Basin.sww'
 OUT_DIR = r'd:/new_valley/geotiff_output'
-RESOLUTION = 10.0       # 栅格分辨率
+RESOLUTION = 90.0       # 栅格分辨率
 QUANTITY = 'depth'      # 改成 'depth'
 CRS = 'EPSG:4326'       # 输出坐标系
 
