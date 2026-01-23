@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
-# mesh_utils.py
-import numpy as np
 import os
+import numpy as np
 
 def generate_rect_mesh(elevation, geotransform, output_dir=None, ply_name='mesh_pre_domain.ply'):
     """

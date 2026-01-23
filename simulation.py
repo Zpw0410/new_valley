@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # run_anuga_from_dem_fast.py
-
+import os
 import numpy as np
 from osgeo import gdal
 import os
@@ -11,10 +11,12 @@ from anuga import Domain
 from mesh_utils import generate_rect_mesh
 from rain_module import RainTifDriver
 
+SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
+
 # -----------------------------
 # 用户参数
 # -----------------------------
-dem_file = r"D:\new_valley\data_for_omaha_hydrology_simu_March_2019\dembnk_wgs84.tif"
+dem_file = './dembnk_wgs84.tif'
 output_dir = 'anuga_output'
 os.makedirs(output_dir, exist_ok=True)
 
@@ -71,6 +73,10 @@ domain.set_name('DEM_Basin')
 domain.set_quantity('elevation', elev_points)
 domain.set_quantity('friction', mannings_n)
 domain.set_quantity('stage', expression='elevation')
+
+if SIMULATION_IN_PARALLEL:
+    domain.set_omp_num_threads(os.cpu_count())
+    
 
 domain.set_boundary({
     'left': anuga.Reflective_boundary(domain),
