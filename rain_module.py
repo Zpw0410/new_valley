@@ -14,7 +14,7 @@ class RainTifDriver:
     - 演化过程中直接使用索引和权重计算，无需再用真实坐标匹配
     """
 
-    def __init__(self, tif_dir, time_pattern=r'(\d{8})_(\d{6})', unit='mm/s'):
+    def __init__(self, tif_dir, time_pattern=r'(\d{8})_(\d{6})', unit='mm/h'):
         self.tif_dir = tif_dir
         self.unit = unit
 
@@ -85,8 +85,8 @@ class RainTifDriver:
             arr = np.nan_to_num(arr, nan=0.0)
             if self.flip_y:
                 arr = arr[::-1, :]
-            # if self.unit == 'mm/s':
-            #     arr /= 1000.0
+            if self.unit == 'mm/s':
+                arr *= 3600.0
             self.rain_stack[i] = arr
             ds = None
 

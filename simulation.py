@@ -90,7 +90,7 @@ domain.set_boundary({
 # 5️⃣ 降雨算子
 # -----------------------------
 rain_driver = RainTifDriver(tif_dir='./313')
-rain_rate = rain_driver.get_rate_function_for_mesh(points, elements)
+rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements)
 rain = anuga.Rainfall(domain, rate=rain_rate, default_rate=0.0)
 domain.forcing_terms.append(rain)
 print("降雨算子已添加到 Domain")
