@@ -2,140 +2,111 @@
 import os
 import numpy as np
 from netCDF4 import Dataset
-from scipy.interpolate import griddata
 from osgeo import gdal, osr
-from tqdm import tqdm  # 进度条库
+from tqdm import tqdm
+from config import REPROJECTED_DEM_FILE
 
-# ================= 固定路径 =================
-SWW_FILE = r'd:/new_valley/DEM_Basin.sww'
-OUT_DIR = r'd:/new_valley/geotiff_output'
-RESOLUTION = 90.0       # 栅格分辨率
-QUANTITY = 'depth'      # 改成 'depth'
-CRS = 'EPSG:4326'       # 输出坐标系
+# ================= 配置 =================
+SWW_FILE = r'./DEM_Basin.sww'
+OUT_DIR = r'./geotiff_output'
+QUANTITY = 'depth'  # 输出水深
+# =======================================
 
-# ---------------- Helpers ----------------
 def get_variable(ds, candidates):
     for name in candidates:
         if name in ds.variables:
             return ds.variables[name][:]
     return None
 
-def read_sww_basic(path):
-    ds = Dataset(path, mode='r')
-    info = {}
-    val = get_variable(ds, ['x', 'node_x', 'longitude', 'lon'])
-    info['x'] = np.array(val) if val is not None else np.array([])
-    val = get_variable(ds, ['y', 'node_y', 'latitude', 'lat'])
-    info['y'] = np.array(val) if val is not None else np.array([])
-    val = get_variable(ds, ['volumes', 'triangles', 'elements', 'cells'])
-    info['volumes'] = np.array(val, dtype=int) if val is not None else None
-    val = get_variable(ds, ['stage_c', 'stage'])
-    info['stage'] = np.array(val) if val is not None else None
-    val = get_variable(ds, ['elevation_c', 'elevation'])
-    info['elevation'] = np.array(val) if val is not None else None
-    val = get_variable(ds, ['time', 'times'])
-    info['time'] = np.array(val) if val is not None else None
-    ds.close()
-    return info
-
-def compute_centroids(x_nodes, y_nodes, volumes):
-    v0 = volumes[:, 0]
-    v1 = volumes[:, 1]
-    v2 = volumes[:, 2]
-    xc = (x_nodes[v0] + x_nodes[v1] + x_nodes[v2]) / 3.0
-    yc = (y_nodes[v0] + y_nodes[v1] + y_nodes[v2]) / 3.0
-    return xc, yc
-
-def write_geotiff_gdal(grid, out_path, xmin, ymax, pixel_size, crs_epsg='4326'):
-    ny, nx = grid.shape
-    driver = gdal.GetDriverByName("GTiff")
-    ds = driver.Create(out_path, nx, ny, 1, gdal.GDT_Float32)
-    ds.SetGeoTransform([xmin, pixel_size, 0, ymax, 0, -pixel_size])
-    srs = osr.SpatialReference()
-    srs.ImportFromEPSG(int(crs_epsg.split(":")[-1]))
-    ds.SetProjection(srs.ExportToWkt())
-    ds.GetRasterBand(1).WriteArray(grid)
-    ds.FlushCache()
-    ds = None
-
-# ---------------- Main ----------------
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
-    info = read_sww_basic(SWW_FILE)
+    
+    # 1. 打开原始参考 DEM 获取地理信息
+    if not os.path.exists(REPROJECTED_DEM_FILE):
+        raise FileNotFoundError(f"Reference DEM not found: {REPROJECTED_DEM_FILE}")
+        
+    ds_ref = gdal.Open(str(REPROJECTED_DEM_FILE))
+    if ds_ref is None:
+        raise RuntimeError(f"Cannot open reference DEM: {REPROJECTED_DEM_FILE}")
+        
+    cols = ds_ref.RasterXSize
+    rows = ds_ref.RasterYSize
+    geotransform = ds_ref.GetGeoTransform()
+    projection = ds_ref.GetProjection()
+    ds_ref = None
+    
+    print(f"Reference DEM size: {rows}x{cols}")
 
-    x_nodes = info['x']
-    y_nodes = info['y']
-    vols = info['volumes']
-    stage_var = info['stage']
-    elev_var = info['elevation']
-    times = info['time']
-
-    if stage_var is None:
-        raise RuntimeError("Cannot find 'stage' variable in SWW file.")
-    if elev_var is None:
-        raise RuntimeError("Cannot find 'elevation' variable in SWW file, cannot compute depth.")
-
-    stage_arr = np.array(stage_var)
-    if stage_arr.ndim == 1:
-        stage_arr = stage_arr[np.newaxis, :]
+    # 2. 读取 SWW 文件
+    print(f"Reading SWW file: {SWW_FILE}...")
+    ds = Dataset(SWW_FILE, mode='r')
+    
+    # 获取变量
+    stage_var = get_variable(ds, ['stage'])
+    elev_var = get_variable(ds, ['elevation'])
+    
+    if stage_var is None or elev_var is None:
+        raise RuntimeError("SWW file must contain 'stage' and 'elevation'.")
+        
+    # 检查维度 (Time, Nodes)
+    # 注意：确保 SWW 是基于顶点的 (Centroids 模式需要不同的处理，但通常 SWW 包含顶点数据)
+    # 如果只有 centroids 数据，需要先插值到顶点，或者你的 mesh_utils 必须保证顶点顺序一致
+    
+    # 你的 mesh_utils 生成的 points 是 (rows * cols) 个
+    # 顺序是 row-major: (0,0), (0,1)... (1,0)...
+    
+    n_nodes = stage_var.shape[1]
+    expected_nodes = rows * cols
+    
+    if n_nodes < expected_nodes:
+         # 严格检查：如果节点数不对，可能是边界处理导致顶点数变化？
+         print(f"Warning: SWW nodes ({n_nodes}) != DEM pixels ({expected_nodes})")
+         raise RuntimeError("SWW has fewer nodes than DEM pixels. Cannot reshape directly.")
+    
+    stage_arr = np.array(stage_var) # (Time, Nodes)
+    elev_arr = np.array(elev_var)   # (Time, Nodes) or (Nodes,) or (1, Nodes)
+    
+    #以此处理恒定高程的情况
+    if elev_arr.ndim == 1:
+        elev_arr = elev_arr[np.newaxis, :]
+    elif elev_arr.shape[0] == 1:
+        pass # OK
+    
     ntime = stage_arr.shape[0]
+    print(f"Processing {ntime} frames...")
 
-    n_nodes = x_nodes.size
-    n_tris = vols.shape[0] if vols is not None else 0
-    second_dim = stage_arr.shape[1]
+    driver = gdal.GetDriverByName("GTiff")
 
-    if second_dim == n_nodes:
-        mode = 'node'
-        px = x_nodes
-        py = y_nodes
-    elif second_dim == n_tris:
-        if vols is None:
-            raise RuntimeError("stage appears triangle-based but 'volumes' missing.")
-        mode = 'triangle'
-        px, py = compute_centroids(x_nodes, y_nodes, vols)
-    else:
-        raise RuntimeError(f"Cannot determine stage type: nodes={n_nodes}, tris={n_tris}, second_dim={second_dim}")
-
-    xmin, xmax = px.min(), px.max()
-    ymin, ymax = py.min(), py.max()
-    nx = int(np.ceil((xmax - xmin)/RESOLUTION)) + 1
-    ny = int(np.ceil((ymax - ymin)/RESOLUTION)) + 1
-    grid_x = np.linspace(xmin, xmax, nx)
-    grid_y = np.linspace(ymin, ymax, ny)
-    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-
-    print(f"Grid: {nx}x{ny}, {ntime} time steps.")
-
-    # ================= 进度条 =================
-    for t_idx in tqdm(range(ntime), desc="Processing timesteps"):
-        vals = stage_arr[t_idx, :]
-
-        # 计算 depth
-        elev_at_t = np.array(elev_var)
-        if elev_at_t.ndim == 2:
-            elev_at_t = elev_at_t[t_idx, :]
-        if mode == 'triangle' and elev_at_t.size == n_tris:
-            interp_vals = vals - elev_at_t
-        elif mode == 'node' and elev_at_t.size == n_nodes:
-            interp_vals = vals - elev_at_t
-        else:
-            raise RuntimeError("Mismatch stage/elevation shapes for depth.")
-
-        # 水深不能为负
-        interp_vals = np.maximum(interp_vals, 0.0)
-
-        # 插值到规则网格
-        grid_q = griddata((px, py), interp_vals, (grid_xx, grid_yy), method='linear')
-        nan_mask = np.isnan(grid_q)
-        if np.any(nan_mask):
-            grid_q[nan_mask] = griddata((px, py), interp_vals, (grid_xx, grid_yy), method='nearest')[nan_mask]
-        grid_q[np.isnan(grid_q)] = 0.0
-        grid_q = grid_q.astype(np.float32)
+    for t_idx in tqdm(range(ntime), desc="Exporting"):
+        # 计算水深
+        s = stage_arr[t_idx, :]
+        z = elev_arr[t_idx, :] if elev_arr.shape[0] > 1 else elev_arr[0, :]
+        depth = s - z
+        depth = np.maximum(depth, 0.0)
+        
+        # 核心逻辑：直接 Reshape
+        # 注意：mesh_utils 是按 row 优先生成的 (r in rows, c in cols)，这完全符合 numpy/gdal 的存储顺序
+        try:
+            # 尝试只取前 rows*cols 个（万一有多余的？）
+            if depth.size >= rows * cols:
+                grid = depth[:rows*cols].reshape((rows, cols))
+            else:
+                 raise ValueError("Not enough points")
+        except ValueError:
+            print(f"\nError reshaping: depth size {depth.size} -> ({rows}, {cols})")
+            raise
 
         out_path = os.path.join(OUT_DIR, f"{QUANTITY}_{t_idx:04d}.tif")
-        write_geotiff_gdal(grid_q, out_path, xmin, ymax, RESOLUTION, CRS)
+        
+        out_ds = driver.Create(out_path, cols, rows, 1, gdal.GDT_Float32)
+        out_ds.SetGeoTransform(geotransform)
+        out_ds.SetProjection(projection)
+        out_ds.GetRasterBand(1).WriteArray(grid)
+        out_ds.FlushCache()
+        out_ds = None
 
-    print("✅ All done.")
+    ds.close()
+    print("✅ Export completed.")
 
 if __name__ == "__main__":
     main()

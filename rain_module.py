@@ -85,7 +85,7 @@ class RainTifDriver:
             arr = np.nan_to_num(arr, nan=0.0)
             if self.flip_y:
                 arr = arr[::-1, :]
-            if self.unit == 'mm/s':
+            if self.unit == 'mm/h':
                 arr *= 3600.0
             self.rain_stack[i] = arr
             ds = None

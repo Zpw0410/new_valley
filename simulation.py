@@ -10,13 +10,13 @@ import anuga
 from anuga import Domain
 from mesh_utils import generate_mesh_from_dem
 from rain_module import RainTifDriver
+from config import REPROJECTED_DEM_FILE
 
-SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
+SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
 
 # -----------------------------
 # 用户参数
 # -----------------------------
-dem_file = './dembnk_wgs84.tif'
 output_dir = 'anuga_output'
 os.makedirs(output_dir, exist_ok=True)
 
@@ -27,45 +27,13 @@ mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
 
 # -----------------------------
-# 1️⃣ 打开 DEM
+# 1 生成网格
 # -----------------------------
-ds = gdal.Open(dem_file)
-if ds is None:
-    print("ERROR: 无法打开 DEM", file=sys.stderr)
-    sys.exit(1)
-
-band = ds.GetRasterBand(1)
-elevation = band.ReadAsArray().astype(np.float32)
-
-nodata = band.GetNoDataValue()
-if nodata is not None:
-    elevation = np.where(elevation == nodata, np.nan, elevation)
-
-gt = ds.GetGeoTransform()
-nrows, ncols = elevation.shape
-
-dx_deg = gt[1]
-dy_deg = abs(gt[5])
-yllcorner_deg = gt[3]
+points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(REPROJECTED_DEM_FILE, output_dir=output_dir, ply_pre=True)
+print(f'网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}')
 
 # -----------------------------
-# 2️⃣ 经纬度 → 米
-# -----------------------------
-lat_center = yllcorner_deg - (nrows * dy_deg) / 2
-dx = dx_deg * 111320 * np.cos(np.deg2rad(lat_center))
-dy = dy_deg * 110540
-
-print(f"DEM size: {nrows} x {ncols}")
-print(f"dx={dx:.2f} m, dy={dy:.2f} m")
-
-# -----------------------------
-# 3️⃣ 生成网格
-# -----------------------------
-points, points_lonlat, elements, boundary, elev_points, dx, dy = generate_mesh_from_dem(dem_file, output_dir=output_dir, ply_pre=True)
-print(f"网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}")
-
-# -----------------------------
-# 4️⃣ 创建 Domain
+# 2 创建 Domain
 # -----------------------------
 print("创建 ANUGA Domain...")
 domain = Domain(points, elements, boundary)
@@ -76,7 +44,6 @@ domain.set_quantity('stage', expression='elevation')
 
 if SIMULATION_IN_PARALLEL:
     domain.set_omp_num_threads(os.cpu_count())
-    
 
 domain.set_boundary({
     'left': anuga.Reflective_boundary(domain),
@@ -87,7 +54,7 @@ domain.set_boundary({
 })
 
 # -----------------------------
-# 5️⃣ 降雨算子
+# 3 降雨算子
 # -----------------------------
 rain_driver = RainTifDriver(tif_dir='./313')
 rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements)
@@ -96,7 +63,7 @@ domain.forcing_terms.append(rain)
 print("降雨算子已添加到 Domain")
 
 # -----------------------------
-# 6️⃣ 演化
+# 4 演化
 # -----------------------------
 print("开始模拟...")
 start_time = time.time()
@@ -116,7 +83,7 @@ end_time = time.time()
 print(f"模拟完成，总耗时: {end_time - start_time:.1f}s")
 
 # -----------------------------
-# 7️⃣ 保存结果
+# 5 保存结果
 # -----------------------------
 out_sww = os.path.join(output_dir, 'DEM_Basin.sww')
 domain.sww_merge(out_sww)
