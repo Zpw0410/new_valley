@@ -1,0 +1,27 @@
+# Ignore all PLY files
+*.ply
+
+# Ignore all SWW files (ANUGA output)
+*.sww
+
+*.tif
+
+*.pdf
+
+*.txt
+
+*.tif.aux.xml
+
+*.tif.xml
+
+*.pyc
+
+*.tif.ovr
+
+*.csv
+
+*.zip
+
+*.tfw
+
+*4fen.py
