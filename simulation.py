@@ -8,7 +8,7 @@ import sys
 import time
 import anuga
 from anuga import Domain
-from mesh_utils import generate_rect_mesh
+from mesh_utils import generate_mesh_from_dem
 from rain_module import RainTifDriver
 
 SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
@@ -61,7 +61,7 @@ print(f"dx={dx:.2f} m, dy={dy:.2f} m")
 # -----------------------------
 # 3️⃣ 生成网格
 # -----------------------------
-points, elements, boundary, elev_points = generate_rect_mesh(elevation, ds.GetGeoTransform(), output_dir=output_dir)
+points, points_lonlat, elements, boundary, elev_points, dx, dy = generate_mesh_from_dem(dem_file, output_dir=output_dir, ply_pre=True)
 print(f"网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}")
 
 # -----------------------------
