@@ -21,7 +21,7 @@ output_dir = 'anuga_output'
 os.makedirs(output_dir, exist_ok=True)
 
 rain_intensity = 0.005  # m/s
-final_time = 3600
+final_time = 86400
 yieldstep = 300
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
