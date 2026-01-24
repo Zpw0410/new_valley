@@ -46,15 +46,21 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
     
     # Generate points
     points = []
+    filtered_elevation = []
     point_indices = {}
     for r in range(nrows):
         for c in range(ncols):
             x = left + (c + 0.5) * res_x + (r + 0.5) * rot_x
             y = top + (r + 0.5) * res_y + (c + 0.5) * rot_y
+            z = elevation[r, c]
+            if np.isnan(z):
+                continue
             idx = len(points)
             points.append([x, y])
+            filtered_elevation.append(z)
             point_indices[(r, c)] = idx
     points = np.array(points, dtype=np.float64)
+    filtered_elevation = np.array(filtered_elevation, dtype=np.float64).flatten()
     
     # Generate elements
     elements = []
@@ -73,17 +79,18 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
     
     for r in range(nrows - 1):
         for c in range(ncols - 1):
-            p_tl = point_indices[(r, c)]
-            p_tr = point_indices[(r, c + 1)]
-            p_bl = point_indices[(r + 1, c)]
-            p_br = point_indices[(r + 1, c + 1)]
+            p_tl = point_indices.get((r, c), None)
+            p_tr = point_indices.get((r, c + 1), None)
+            p_bl = point_indices.get((r + 1, c), None)
+            p_br = point_indices.get((r + 1, c + 1), None)
             
-            is_tl_nan = np.isnan(elevation[r, c])
-            is_tr_nan = np.isnan(elevation[r, c + 1])
-            is_bl_nan = np.isnan(elevation[r + 1, c])
-            is_br_nan = np.isnan(elevation[r + 1, c + 1])
+            # is_tl_nan = np.isnan(elevation[r, c])
+            # is_tr_nan = np.isnan(elevation[r, c + 1])
+            # is_bl_nan = np.isnan(elevation[r + 1, c])
+            # is_br_nan = np.isnan(elevation[r + 1, c + 1])
             
-            if not (is_tl_nan or is_tr_nan or is_br_nan):
+            # if not (is_tl_nan or is_tr_nan or is_br_nan):
+            if not (p_tl is None or p_tr is None or p_br is None):
                 elements.append([p_tl, p_br, p_tr])
                 tid = len(elements) - 1
                 
@@ -96,7 +103,7 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
                 # Edge2: TL(0)-BR(1)
                 add_edge_usage(p_tl, p_br, tid, 2, 'exterior')
                 
-            if not (is_tl_nan or is_bl_nan or is_br_nan):
+            if not (p_tl is None or p_bl is None or p_br is None):
                 elements.append([p_tl, p_bl, p_br])
                 tid = len(elements) - 1
                 
@@ -119,24 +126,8 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
             tri_id, edge_id, tag = usages[0]
             boundary[(tri_id, edge_id)] = tag
 
-    # # Generate boundary dict
-    # boundary = {}
-    # tri_id = 0
-    # for r in range(nrows - 1):
-    #     for c in range(ncols - 1):
-    #         if r == 0:
-    #             boundary[(tri_id, 0)] = 'top'
-    #         if c == ncols - 2:
-    #             boundary[(tri_id, 1)] = 'right'
-    #         tri_id += 1
-    #         if c == 0:
-    #             boundary[(tri_id, 0)] = 'left'
-    #         if r == nrows - 2:
-    #             boundary[(tri_id, 2)] = 'bottom'
-    #         tri_id += 1
-
-    # Generate elevation at points
-    elev_points = elevation.flatten()
+    # # Generate elevation at points
+    # elev_points = elevation.flatten()
     # nan_mask = np.isnan(elev_points)
     # if np.any(nan_mask):
     #     elev_points[nan_mask] = np.nanmean(elev_points)
@@ -162,14 +153,14 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
             f.write("property list uchar int vertex_indices\n")
             f.write("end_header\n")
             for i in range(points.shape[0]):
-                f.write(f"{points[i,0]:.3f} {points[i,1]:.3f} {elev_points[i]:.3f}\n")
+                f.write(f"{points[i,0]:.3f} {points[i,1]:.3f} {filtered_elevation[i]:.3f}\n")
             for tri in elements:
                 f.write(f"3 {tri[0]} {tri[1]} {tri[2]}\n")
         print("✔ 已生成 PLY 文件:", ply_file)
     
     ds = None
 
-    return points, points_proj, elements, boundary, elev_points
+    return points, points_proj, elements, boundary, filtered_elevation
 
 
 # Example usage

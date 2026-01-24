@@ -5,9 +5,10 @@ import sys
 
 if sys.platform == 'darwin':
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'  # 解决 macOS 下的 OpenMP 冲突问题
-    
+
 import time
 import anuga
+import shutil
 import numpy as np
 from anuga import Domain
 from rain_module import RainTifDriver
@@ -15,7 +16,7 @@ from config import REPROJECTED_DEM_FILE
 from mesh_utils import generate_mesh_from_dem
 from flow_module import load_and_project_stations, create_inflow_regions, create_inlet_operators
 
-SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
+SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
 
 # -----------------------------
 # 用户参数
@@ -28,6 +29,15 @@ final_time = 86400
 yieldstep = 300
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
+
+if os.path.exists(output_dir):
+    try:
+        shutil.rmtree(output_dir)
+    except OSError:
+        pass # 可能文件被占用
+os.makedirs(output_dir, exist_ok=True)
+if os.path.exists('DEM_Basin.sww'):
+    os.remove('DEM_Basin.sww')
 
 # -----------------------------
 # 1 生成网格
@@ -70,7 +80,6 @@ print("降雨算子已添加到 Domain")
 # -----------------------------
 stations, station_ids = load_and_project_stations()
 regions = create_inflow_regions(domain, stations, station_ids, radius=45.0)  # 调整 radius
-# start_time = datetime(2019, 3, 10, 1, 0)  # 可选，指定模拟起始时间
 inlet_ops = create_inlet_operators(domain, regions, station_ids)
 
 print("入流算子已添加到 Domain")
@@ -79,6 +88,7 @@ print("入流算子已添加到 Domain")
 # 6 演化
 # -----------------------------
 print("开始模拟...")
+# start_time = datetime(2019, 3, 10, 1, 0)  # 可选，指定模拟起始时间
 start_time = time.time()
 step_count = 0
 
