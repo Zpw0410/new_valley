@@ -15,6 +15,8 @@ from rain_module import RainTifDriver
 from config import REPROJECTED_DEM_FILE
 from mesh_utils import generate_mesh_from_dem
 from flow_module import load_and_project_stations, create_inflow_regions, create_inlet_operators
+from datetime import datetime, timedelta
+import re
 
 SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
 
@@ -29,6 +31,7 @@ final_time = 86400
 yieldstep = 300
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
+start_time="20190310_010000"  # 模拟起始时间字符串，格式 YYYYMMDD_HHMMSS
 
 if os.path.exists(output_dir):
     try:
@@ -38,6 +41,20 @@ if os.path.exists(output_dir):
 os.makedirs(output_dir, exist_ok=True)
 if os.path.exists('DEM_Basin.sww'):
     os.remove('DEM_Basin.sww')
+
+
+def parse_ymd_time(time_str):
+    m = re.match(r'(\d{4})(\d{2})(\d{2})_(\d{6})', time_str)
+    if not m:
+        raise ValueError(f"Invalid time format: {time_str}")
+    year  = int(m.group(1))
+    month = int(m.group(2))
+    day   = int(m.group(3))
+    hhmmss = m.group(4)
+    hour   = int(hhmmss[:2])
+    minute = int(hhmmss[2:4])
+    second = int(hhmmss[4:6])
+    return datetime(year, month, day, hour, minute, second)
 
 # -----------------------------
 # 1 生成网格
@@ -70,7 +87,7 @@ domain.set_boundary({
 # 3 降雨算子
 # -----------------------------
 rain_driver = RainTifDriver(tif_dir='./data_for_omaha_hydrology_simu_March_2019/rain/dist_rain')
-rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements,start_time_str="20190310_010000")
+rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements,start_time_str=start_time)
 rain = anuga.Rainfall(domain, rate=rain_rate, default_rate=0.0)
 domain.forcing_terms.append(rain)
 print("降雨算子已添加到 Domain")
@@ -80,9 +97,12 @@ print("降雨算子已添加到 Domain")
 # -----------------------------
 stations, station_ids = load_and_project_stations()
 regions = create_inflow_regions(domain, stations, station_ids, radius=45.0)  # 调整 radius
-inlet_ops = create_inlet_operators(domain, regions, station_ids, start_time="20190310_010000")
+inlet_ops = create_inlet_operators(domain, regions, station_ids, start_time=start_time)
 
 print("入流算子已添加到 Domain")
+
+sim_start_dt = parse_ymd_time(start_time)
+print(f"模拟起始真实时间：{sim_start_dt}")
 
 # -----------------------------
 # 6 演化
@@ -100,7 +120,12 @@ for t in domain.evolve(yieldstep=yieldstep, finaltime=final_time):
         stage_min = np.min(domain.quantities['stage'].centroid_values)
         stage_max = np.max(domain.quantities['stage'].centroid_values)
         stage_mean = np.mean(domain.quantities['stage'].centroid_values)
-        print(f"[t={t:.1f}s] 步数: {step_count}, 耗时: {elapsed:.1f}s, stage_min={stage_min:.3f}, stage_max={stage_max:.3f}, stage_mean={stage_mean:.3f}")
+        current_dt = sim_start_dt + timedelta(seconds=t)
+        print(
+            f"[t={t:.1f}s | {current_dt.strftime('%Y-%m-%d %H:%M:%S')}] "
+            f"步数: {step_count}, 耗时: {elapsed:.1f}s, "
+            f"stage_min={stage_min:.3f}, stage_max={stage_max:.3f}, stage_mean={stage_mean:.3f}"
+        )
 
 end_time = time.time()
 print(f"模拟完成，总耗时: {end_time - start_time:.1f}s")
