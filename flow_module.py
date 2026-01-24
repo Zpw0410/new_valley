@@ -9,7 +9,7 @@ import io  # 添加 io 导入
 CFS_TO_M3S = 0.028316846846592
 
 # 步骤1: 读取 upstream_bci.csv 并投影坐标（修复 pyproj 语法）
-def load_and_project_stations(csv_file='upstream_bci.csv'):
+def load_and_project_stations(csv_file='./upstream_bci.csv'):
     df = pd.read_csv(csv_file, dtype={'station_id': str})  # 强制 station_id 为字符串，保留前导零
     stations = {}
     

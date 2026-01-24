@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 # run_anuga_from_dem_fast.py
 import os
-import numpy as np
-from osgeo import gdal
-import os
 import sys
+
+if sys.platform == 'darwin':
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'  # 解决 macOS 下的 OpenMP 冲突问题
+    
 import time
 import anuga
+import numpy as np
 from anuga import Domain
-from mesh_utils import generate_mesh_from_dem
 from rain_module import RainTifDriver
 from config import REPROJECTED_DEM_FILE
+from mesh_utils import generate_mesh_from_dem
 from flow_module import load_and_project_stations, create_inflow_regions, create_inlet_operators
 
-SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
+SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
 
 # -----------------------------
 # 用户参数

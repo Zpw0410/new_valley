@@ -25,3 +25,9 @@
 *.tfw
 
 *4fen.py
+
+.DS_Store
+
+geotiff_output/
+
+anuga_output/

@@ -27,12 +27,6 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
     if ds is None:
         raise RuntimeError(f"Cannot open DEM: {dem_file}")
 
-    band = ds.GetRasterBand(1)
-    elevation = band.ReadAsArray().astype(np.float64)
-    nodata = band.GetNoDataValue()
-    if nodata is not None:
-        elevation = np.where(elevation == nodata, np.nan, elevation)
-
     gt = ds.GetGeoTransform()
     left = gt[0]
     res_x = gt[1]
@@ -43,6 +37,12 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
     ncols = ds.RasterXSize
     nrows = ds.RasterYSize
     print(f'DEM size: {nrows} x {ncols}')
+
+    band = ds.GetRasterBand(1)
+    elevation = band.ReadAsArray().astype(np.float64)
+    nodata = band.GetNoDataValue()
+    if nodata is not None:
+        elevation = np.where(elevation == nodata, np.nan, elevation)
     
     # Generate points
     points = []
@@ -58,37 +58,88 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
     
     # Generate elements
     elements = []
+    
+    # 用于追踪边的使用次数，以此构建拓扑边界
+    # Key: 边的顶点对 (sorted tuple), Value: list of (tri_id, edge_id, direction_tag)
+    # direction_tag 仅用于当该边最终判定为边界时，赋予其物理意义上的方位（top/bottom/left/right）
+    edge_tracker = {}
+    
+    def add_edge_usage(v1, v2, tri_id, edge_id, tag):
+        # 对顶点排序，确保 (u, v) 和 (v, u) 被视为同一条边
+        edge_key = tuple(sorted((v1, v2)))
+        if edge_key not in edge_tracker:
+            edge_tracker[edge_key] = []
+        edge_tracker[edge_key].append((tri_id, edge_id, tag))
+    
     for r in range(nrows - 1):
         for c in range(ncols - 1):
             p_tl = point_indices[(r, c)]
             p_tr = point_indices[(r, c + 1)]
             p_bl = point_indices[(r + 1, c)]
             p_br = point_indices[(r + 1, c + 1)]
-            elements.append([p_tl, p_br, p_tr])
-            elements.append([p_tl, p_bl, p_br])
+            
+            is_tl_nan = np.isnan(elevation[r, c])
+            is_tr_nan = np.isnan(elevation[r, c + 1])
+            is_bl_nan = np.isnan(elevation[r + 1, c])
+            is_br_nan = np.isnan(elevation[r + 1, c + 1])
+            
+            if not (is_tl_nan or is_tr_nan or is_br_nan):
+                elements.append([p_tl, p_br, p_tr])
+                tid = len(elements) - 1
+                
+                # Edge0: BR(1)-TR(2)
+                add_edge_usage(p_br, p_tr, tid, 0, 'right')
+                
+                # Edge1: TR(2)-TL[0]
+                add_edge_usage(p_tr, p_tl, tid, 1, 'top')
+                
+                # Edge2: TL(0)-BR(1)
+                add_edge_usage(p_tl, p_br, tid, 2, 'exterior')
+                
+            if not (is_tl_nan or is_bl_nan or is_br_nan):
+                elements.append([p_tl, p_bl, p_br])
+                tid = len(elements) - 1
+                
+                # Edge0: BL(1)-BR(2)
+                add_edge_usage(p_bl, p_br, tid, 0, 'bottom')
+                
+                # Edge1: BR(2)-TL(0)
+                add_edge_usage(p_br, p_tl, tid, 1, 'exterior')
+                
+                # Edge2: TL(0)-BL(1)
+                add_edge_usage(p_tl, p_bl, tid, 2, 'left')
+                
     elements = np.array(elements, dtype=np.int64)
-
-    # Generate boundary dict
+    
+    # Generate boundary dict based on topology
+    # 核心逻辑：只有当 usages 列表长度为 1 时，说明该边没有邻居，是边界边
     boundary = {}
-    tri_id = 0
-    for r in range(nrows - 1):
-        for c in range(ncols - 1):
-            if r == 0:
-                boundary[(tri_id, 0)] = 'top'
-            if c == ncols - 2:
-                boundary[(tri_id, 1)] = 'right'
-            tri_id += 1
-            if c == 0:
-                boundary[(tri_id, 0)] = 'left'
-            if r == nrows - 2:
-                boundary[(tri_id, 2)] = 'bottom'
-            tri_id += 1
+    for edge_key, usages in edge_tracker.items():
+        if len(usages) == 1:
+            tri_id, edge_id, tag = usages[0]
+            boundary[(tri_id, edge_id)] = tag
+
+    # # Generate boundary dict
+    # boundary = {}
+    # tri_id = 0
+    # for r in range(nrows - 1):
+    #     for c in range(ncols - 1):
+    #         if r == 0:
+    #             boundary[(tri_id, 0)] = 'top'
+    #         if c == ncols - 2:
+    #             boundary[(tri_id, 1)] = 'right'
+    #         tri_id += 1
+    #         if c == 0:
+    #             boundary[(tri_id, 0)] = 'left'
+    #         if r == nrows - 2:
+    #             boundary[(tri_id, 2)] = 'bottom'
+    #         tri_id += 1
 
     # Generate elevation at points
     elev_points = elevation.flatten()
-    nan_mask = np.isnan(elev_points)
-    if np.any(nan_mask):
-        elev_points[nan_mask] = np.nanmean(elev_points)
+    # nan_mask = np.isnan(elev_points)
+    # if np.any(nan_mask):
+    #     elev_points[nan_mask] = np.nanmean(elev_points)
     
     # Get epsg code from DEM
     proj_wkt = ds.GetProjectionRef()
@@ -105,13 +156,13 @@ def generate_mesh_from_dem(dem_file, output_dir=None, ply_pre=True, target_epsg=
         ply_file = os.path.join(output_dir, 'DEM_Basin_pre_domain.ply')
         with open(ply_file, 'w') as f:
             f.write("ply\nformat ascii 1.0\n")
-            f.write(f"element vertex {points_proj.shape[0]}\n")
+            f.write(f"element vertex {points.shape[0]}\n")
             f.write("property float x\nproperty float y\nproperty float z\n")
             f.write(f"element face {elements.shape[0]}\n")
             f.write("property list uchar int vertex_indices\n")
             f.write("end_header\n")
-            for i in range(points_proj.shape[0]):
-                f.write(f"{points_proj[i,0]:.3f} {points_proj[i,1]:.3f} {elev_points[i]:.3f}\n")
+            for i in range(points.shape[0]):
+                f.write(f"{points[i,0]:.3f} {points[i,1]:.3f} {elev_points[i]:.3f}\n")
             for tri in elements:
                 f.write(f"3 {tri[0]} {tri[1]} {tri[2]}\n")
         print("✔ 已生成 PLY 文件:", ply_file)

@@ -65,7 +65,23 @@ def main():
     
     stage_arr = np.array(stage_var) # (Time, Nodes)
     elev_arr = np.array(elev_var)   # (Time, Nodes) or (Nodes,) or (1, Nodes)
-    
+
+    # 3. 构建有效节点掩膜 (Active Mask)
+    # 只输出属于三角形(elements)的顶点数据，剔除孤立点
+    volumes_var = get_variable(ds, ['volumes', 'elements', 'connectivity'])
+    if volumes_var is not None:
+        print("Building active mask from elements...")
+        volumes = np.array(volumes_var)
+        valid_mask_flat = np.zeros(n_nodes, dtype=bool)
+        # 将所有出现在三角形中的顶点标记为 True
+        valid_node_indices = np.unique(volumes)
+        # 确保索引在有效范围内
+        valid_node_indices = valid_node_indices[valid_node_indices < n_nodes]
+        valid_mask_flat[valid_node_indices] = True
+    else:
+        print("Warning: Connectivity data not found. All points will be exported.")
+        valid_mask_flat = np.ones(n_nodes, dtype=bool)
+
     #以此处理恒定高程的情况
     if elev_arr.ndim == 1:
         elev_arr = elev_arr[np.newaxis, :]
@@ -90,6 +106,10 @@ def main():
             # 尝试只取前 rows*cols 个（万一有多余的？）
             if depth.size >= rows * cols:
                 grid = depth[:rows*cols].reshape((rows, cols))
+                
+                # 应用 Mask: 将非 Element 区域设为 NoData
+                mask_grid = valid_mask_flat[:rows*cols].reshape((rows, cols))
+                grid[~mask_grid] = -9999.0
             else:
                  raise ValueError("Not enough points")
         except ValueError:
@@ -101,7 +121,14 @@ def main():
         out_ds = driver.Create(out_path, cols, rows, 1, gdal.GDT_Float32)
         out_ds.SetGeoTransform(geotransform)
         out_ds.SetProjection(projection)
-        out_ds.GetRasterBand(1).WriteArray(grid)
+        
+        band = out_ds.GetRasterBand(1)
+        band.WriteArray(grid)
+        band.SetNoDataValue(-9999.0)
+        
+        # 显式计算统计信息 (False 表示不使用近似值，进行精确计算)
+        band.ComputeStatistics(False)
+        
         out_ds.FlushCache()
         out_ds = None
 
