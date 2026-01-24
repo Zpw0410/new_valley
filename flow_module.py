@@ -4,9 +4,35 @@ import numpy as np
 from pyproj import Proj, Transformer
 from datetime import datetime
 import io  # 添加 io 导入
+from datetime import datetime, timedelta
+import re
 
 # 单位转换：cfs → m³/s
 CFS_TO_M3S = 0.028316846846592
+
+
+# ----------------------------------------
+# 解析 YYYYMMDD_HHMMSS 或 YYYYDDD_HHMMSS
+# ----------------------------------------
+def parse_time_string(time_str):
+    """
+    支持两种格式：
+    1. 绝对时间 YYYYMMDD_HHMMSS 例如 20190310_031100
+    返回 datetime 对象
+    """
+    # 尝试绝对时间 YYYYMMDD_HHMMSS
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})_(\d{6})$', time_str)
+    if m:
+        year  = int(m.group(1))
+        month = int(m.group(2))
+        day   = int(m.group(3))
+        hhmmss = m.group(4)
+        hour   = int(hhmmss[:2])
+        minute = int(hhmmss[2:4])
+        second = int(hhmmss[4:6])
+        return datetime(year, month, day, hour, minute, second)
+
+    raise ValueError(f"Invalid time format: {time_str}. Expect YYYYMMDD_HHMMSS ")
 
 # 步骤1: 读取 upstream_bci.csv 并投影坐标（修复 pyproj 语法）
 def load_and_project_stations(csv_file='./upstream_bci.csv'):
@@ -74,14 +100,22 @@ def load_flow_data(station_id, start_time=None):
     # 转换为 m³/s
     df['discharge_m3s'] = df['discharge_cfs'] * CFS_TO_M3S
     
-    # 设置时间零点
+    # -----------------------------
+    # 处理 start_time
+    # -----------------------------
     if start_time is None:
-        start_time = df['datetime'].min()
-    
-    df['t_seconds'] = (df['datetime'] - start_time).dt.total_seconds()
+        start_time_dt = df['datetime'].min()
+    else:
+        start_time_dt = parse_time_string(start_time)
+        print(f"用户指定 start_time: {start_time_dt} -> Unix {int(start_time_dt.timestamp())}")
+
+
+    df['t_seconds'] = (df['datetime'] - start_time_dt).dt.total_seconds()
+
     
     times = df['t_seconds'].values
     flows = df['discharge_m3s'].values
+
     
     # 插值函数（超出范围保持首尾值）
     def Q(t):

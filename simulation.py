@@ -16,7 +16,7 @@ from config import REPROJECTED_DEM_FILE
 from mesh_utils import generate_mesh_from_dem
 from flow_module import load_and_project_stations, create_inflow_regions, create_inlet_operators
 
-SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
+SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
 
 # -----------------------------
 # 用户参数
@@ -42,7 +42,7 @@ if os.path.exists('DEM_Basin.sww'):
 # -----------------------------
 # 1 生成网格
 # -----------------------------
-points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(REPROJECTED_DEM_FILE, output_dir=output_dir, ply_pre=True)
+points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(str(REPROJECTED_DEM_FILE), output_dir=output_dir, ply_pre=True)
 print(f'网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}')
 
 # -----------------------------
@@ -69,8 +69,8 @@ domain.set_boundary({
 # -----------------------------
 # 3 降雨算子
 # -----------------------------
-rain_driver = RainTifDriver(tif_dir='./313')
-rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements)
+rain_driver = RainTifDriver(tif_dir='./data_for_omaha_hydrology_simu_March_2019/rain/dist_rain')
+rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements,start_time_str="20190310_010000")
 rain = anuga.Rainfall(domain, rate=rain_rate, default_rate=0.0)
 domain.forcing_terms.append(rain)
 print("降雨算子已添加到 Domain")
@@ -80,7 +80,7 @@ print("降雨算子已添加到 Domain")
 # -----------------------------
 stations, station_ids = load_and_project_stations()
 regions = create_inflow_regions(domain, stations, station_ids, radius=45.0)  # 调整 radius
-inlet_ops = create_inlet_operators(domain, regions, station_ids)
+inlet_ops = create_inlet_operators(domain, regions, station_ids, start_time="20190310_010000")
 
 print("入流算子已添加到 Domain")
 

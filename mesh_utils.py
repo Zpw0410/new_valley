@@ -12,6 +12,8 @@ import os
 import numpy as np
 from osgeo import gdal
 from pyproj import Transformer
+import pyproj
+pyproj.datadir.set_data_dir(r"D:\Anaconda\envs\anuga_env\Library\share\proj")
 
 def _pixel_center_from_gt(gt, r, c):
     """计算像素中心坐标，支持旋转 geotransform"""
