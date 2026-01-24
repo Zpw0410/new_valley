@@ -86,7 +86,7 @@ class RainTifDriver:
             if self.flip_y:
                 arr = arr[::-1, :]
             if self.unit == 'mm/h':
-                arr *= 3600.0
+                arr /= 3600.0
             self.rain_stack[i] = arr
             ds = None
 
