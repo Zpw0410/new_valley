@@ -15,7 +15,8 @@ QUANTITY = 'depth'  # 输出水深
 def get_variable(ds, candidates):
     for name in candidates:
         if name in ds.variables:
-            return ds.variables[name][:]
+            # 修改：去掉 [:]，返回变量对象本身，避免立即读取所有数据
+            return ds.variables[name]
     return None
 
 def main():
@@ -33,7 +34,6 @@ def main():
     rows = ds_ref.RasterYSize
     geotransform = ds_ref.GetGeoTransform()
     projection = ds_ref.GetProjection()
-    # ds_ref = None  # We need this later for reconstruction
     
     print(f"Reference DEM size: {rows}x{cols}")
 
@@ -57,8 +57,16 @@ def main():
     
     n_nodes = stage_var.shape[1]
     
-    stage_arr = np.array(stage_var) # (Time, Nodes)
-    elev_arr = np.array(elev_var)   # (Time, Nodes) or (Nodes,) or (1, Nodes)
+    # 修改：stage数据量大，直接使用NetCDF变量对象进行惰性读取 (Lazy Loading)
+    stage_arr = stage_var 
+
+    # 修改：elevation数据如果较小（通常是静态的），可以读入内存以加速计算
+    # 如果是随时间变化的（动态地形），则也保持惰性读取
+    if elev_var.ndim == 1 or (elev_var.ndim == 2 and elev_var.shape[0] == 1):
+        print("Loading static elevation into memory...")
+        elev_arr = np.array(elev_var[:]) # 显式读取静态地形
+    else:
+        elev_arr = elev_var   # 动态地形保持在磁盘上
 
     # 3. 处理节点映射关系 (关键修改)
     # 由于 mesh_utils 现在跳过了 NaN 点，我们需要重建 (idx -> r, c) 的关系
