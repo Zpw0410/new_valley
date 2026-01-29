@@ -24,6 +24,28 @@
 
 *.tfw
 
+*.shp
+
+*.cpg
+
+*.prj
+
+*.dbf
+
+*.shx
+
+*.sbn
+
+*.xml
+
+*.sbx
+
+*river_line.py
+
+*rain_module copy.py
+
+*gengrate_mount.py
+
 *4fen.py
 
 .DS_Store

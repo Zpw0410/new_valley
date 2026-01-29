@@ -6,17 +6,18 @@ from osgeo import gdal
 from datetime import datetime, timedelta
 
 
-
 class RainTifDriver:
     """
-    高性能空间降雨驱动器（支持 WGS84 或投影坐标）
+    高性能空间降雨驱动器（支持投影坐标，如 UTM EPSG:32615）
 
     改进：
     - 从文件名解析完整日期时间（YYYYMMDD_HHMMSS）
-    - 支持传入模拟起始时间字符串（如 '2019313_010101' → 2019年第313天 01:01:01）
+    - 支持传入模拟起始时间字符串（如 '20190313_010101' → 2019年3月13日 01:01:01）
     - time_steps 存储每个 TIF 的绝对 Unix 时间戳（秒）
     - rate_func(t) 中的 t 是相对模拟时间，内部转换为绝对时间查询
     - 新增详细调试打印
+    - 优化内存：不预读所有雨强数据，仅在需要时动态读取对应 TIF
+    - 支持投影坐标系（UTM 32615），points 传入为 UTM x,y 坐标
     """
 
     def __init__(self, tif_dir, time_pattern=r'(\d{8})_(\d{6})', unit='mm/h'):
@@ -97,7 +98,7 @@ class RainTifDriver:
         print("=" * 50 + "\n")
 
         # -----------------------------
-        # 读取第一个 TIF 获取地理信息
+        # 读取第一个 TIF 获取地理信息（投影坐标 UTM 32615）
         # -----------------------------
         sample_path = os.path.join(tif_dir, self.tif_files[0])
         sample_ds = gdal.Open(sample_path)
@@ -108,7 +109,7 @@ class RainTifDriver:
         self.origin_x = gt[0]
         self.pixel_w  = gt[1]
         self.origin_y = gt[3]
-        self.pixel_h  = gt[5]  # 通常负值
+        self.pixel_h  = gt[5]  # 通常正值或负值，根据坐标系
 
         if abs(gt[2]) > 1e-12 or abs(gt[4]) > 1e-12:
             raise RuntimeError("TIF must be non-rotated (gt[2]==gt[4]==0)")
@@ -116,11 +117,11 @@ class RainTifDriver:
         self.ncols = sample_ds.RasterXSize
         self.nrows = sample_ds.RasterYSize
 
-        # 像素中心坐标
+        # 像素中心坐标（UTM x,y）
         x_centers = self.origin_x + (np.arange(self.ncols) + 0.5) * self.pixel_w
         y_centers = self.origin_y + (np.arange(self.nrows) + 0.5) * self.pixel_h
 
-        if y_centers[0] > y_centers[-1]:
+        if self.pixel_h < 0:  # 如果 y 方向是递减的（常见于北半球投影）
             y_centers = y_centers[::-1]
             self.flip_y = True
         else:
@@ -129,24 +130,9 @@ class RainTifDriver:
         self.x_centers = x_centers
         self.y_centers = y_centers
 
-        # -----------------------------
-        # 读取所有雨强数据栈
-        # -----------------------------
-        ntime = len(self.tif_files)
-        self.rain_stack = np.zeros((ntime, self.nrows, self.ncols), dtype=float)
-
-        print(f"正在读取 {ntime} 个雨强 TIF ...")
-        for i, fname in enumerate(self.tif_files):
-            ds = gdal.Open(os.path.join(tif_dir, fname))
-            arr = ds.GetRasterBand(1).ReadAsArray().astype(float)
-            arr = np.nan_to_num(arr, nan=0.0)
-            if self.flip_y:
-                arr = arr[::-1, :]
-            if self.unit == 'mm/h':
-                arr /= 3600.0  # 转为 mm/s
-            self.rain_stack[i] = arr
-            ds = None
-        print("所有雨强数据读取完成。\n")
+        # 不预读雨强数据，仅存储路径
+        self.tif_paths = [os.path.join(tif_dir, f) for f in self.tif_files]
+        print("地理信息读取完成，所有 TIF 路径已索引（内存优化模式）。\n")
 
     # ------------------------------------------------------------------
     # 解析起始时间（20190313_010101）
@@ -166,6 +152,24 @@ class RainTifDriver:
         second = int(hhmmss[4:6])
         return datetime(year, month, day, hour, minute, second)
 
+    # ------------------------------------------------------------------
+    # 动态读取 TIF 数据（内存优化）
+    # ------------------------------------------------------------------
+    def load_rain_array(self, idx: int) -> np.ndarray:
+        """动态读取指定索引的 TIF 雨强数组"""
+        path = self.tif_paths[idx]
+        ds = gdal.Open(path)
+        if ds is None:
+            raise RuntimeError(f"Cannot open TIF: {path}")
+        
+        arr = ds.GetRasterBand(1).ReadAsArray().astype(float)
+        arr = np.nan_to_num(arr, nan=0.0)
+        if self.flip_y:
+            arr = arr[::-1, :]
+        if self.unit == 'mm/h':
+            arr /= 3600.0  # 转为 mm/s
+        ds = None  # 释放
+        return arr
 
     # ------------------------------------------------------------------
     # 生成 ANUGA 用的 rate 函数
@@ -175,7 +179,9 @@ class RainTifDriver:
         返回 ANUGA 用的雨强函数 rate(t) → mm/s
 
         参数:
-            start_time_str: 可选，模拟 t=0 对应的真实时刻，例如 "2019313_010101"
+            points: 网格点坐标（UTM x,y）
+            elements: 三角形索引
+            start_time_str: 可选，模拟 t=0 对应的真实时刻，例如 "20190313_010101"
                             若不传，默认使用第一个 TIF 的时间作为 t=0
         """
         points = np.asarray(points)
@@ -184,7 +190,7 @@ class RainTifDriver:
 
         elements = np.asarray(elements, dtype=int)
 
-        # 计算三角形重心
+        # 计算三角形重心（UTM x,y）
         tri_centers = np.mean(points[elements], axis=1)
 
         # 预计算双线性权重（一次性完成，后面不再计算坐标）
@@ -217,13 +223,17 @@ class RainTifDriver:
             print(f"用户指定模拟起始时间：{start_dt} (Unix {start_unix})")
 
         # -----------------------------
-        # 构造 rate 函数
+        # 构造 rate 函数（动态读取雨强）
         # -----------------------------
         def rate_func(t):
             abs_t = start_unix + t                      # 转换为真实世界时间
             idx = np.searchsorted(self.time_steps, abs_t, side='right') - 1
             idx = np.clip(idx, 0, len(self.time_steps) - 1)
-            stack_t = self.rain_stack[idx]
-            return np.sum(stack_t[row_idx, col_idx] * weights, axis=1)
+            
+            # 动态读取当前时间步的雨强数组
+            rain_array = self.load_rain_array(idx)
+            
+            # 双线性插值
+            return np.sum(rain_array[row_idx, col_idx] * weights, axis=1)
 
         return rate_func

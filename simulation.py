@@ -17,6 +17,7 @@ from mesh_utils import generate_mesh_from_dem
 from flow_module import load_and_project_stations, create_inflow_regions, create_inlet_operators
 from datetime import datetime, timedelta
 import re
+from mesh_build import build_mesh_from_ns_ne
 
 SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
 
@@ -32,6 +33,8 @@ yieldstep = 300
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
 start_time="20190310_010000"  # 模拟起始时间字符串，格式 YYYYMMDD_HHMMSS
+ns_path = "ns.txt"
+ne_path = "ne.txt"
 
 if os.path.exists(output_dir):
     try:
@@ -59,16 +62,17 @@ def parse_ymd_time(time_str):
 # -----------------------------
 # 1 生成网格
 # -----------------------------
-points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(str(REPROJECTED_DEM_FILE), output_dir=output_dir, ply_pre=True)
-print(f'网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}')
+# points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(str(REPROJECTED_DEM_FILE), output_dir=output_dir, ply_pre=True)
+# print(f'网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}')
+coords, tris, elevs ,boundary, tri_types= build_mesh_from_ns_ne(ns_path, ne_path)
 
 # -----------------------------
 # 2 创建 Domain
 # -----------------------------
 print("创建 ANUGA Domain...")
-domain = Domain(points, elements, boundary)
+domain:Domain = anuga.Domain(coords.tolist(), tris.tolist(),boundary=boundary)
 domain.set_name('DEM_Basin')
-domain.set_quantity('elevation', elev_points)
+domain.set_quantity('elevation', elevs)
 domain.set_quantity('friction', mannings_n)
 domain.set_quantity('stage', expression='elevation')
 
@@ -76,18 +80,18 @@ if SIMULATION_IN_PARALLEL:
     domain.set_omp_num_threads(os.cpu_count())
 
 domain.set_boundary({
-    'left': anuga.Reflective_boundary(domain),
-    'right': anuga.Reflective_boundary(domain),
-    'top': anuga.Reflective_boundary(domain),
-    'bottom': anuga.Reflective_boundary(domain),
+    # 'left': anuga.Reflective_boundary(domain),
+    # 'right': anuga.Reflective_boundary(domain),
+    # 'top': anuga.Reflective_boundary(domain),
+    # 'bottom': anuga.Reflective_boundary(domain),
     'exterior': anuga.Reflective_boundary(domain),
 })
 
 # -----------------------------
 # 3 降雨算子
 # -----------------------------
-rain_driver = RainTifDriver(tif_dir='./data_for_omaha_hydrology_simu_March_2019/rain/dist_rain')
-rain_rate = rain_driver.get_rate_function_for_mesh(points_lonlat, elements,start_time_str=start_time)
+rain_driver = RainTifDriver(tif_dir='rain_32615')
+rain_rate = rain_driver.get_rate_function_for_mesh(coords, tris,start_time_str=start_time)
 rain = anuga.Rainfall(domain, rate=rain_rate, default_rate=0.0)
 domain.forcing_terms.append(rain)
 print("降雨算子已添加到 Domain")
@@ -96,7 +100,7 @@ print("降雨算子已添加到 Domain")
 # 5 入流算子
 # -----------------------------
 stations, station_ids = load_and_project_stations()
-regions = create_inflow_regions(domain, stations, station_ids, radius=45.0)  # 调整 radius
+regions = create_inflow_regions(domain, stations, station_ids, radius=90.0)  # 调整 radius
 inlet_ops = create_inlet_operators(domain, regions, station_ids, start_time=start_time)
 
 print("入流算子已添加到 Domain")
