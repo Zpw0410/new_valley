@@ -70,7 +70,7 @@ coords, tris, elevs ,boundary, tri_types= build_mesh_from_ns_ne(ns_path, ne_path
 # 2 创建 Domain
 # -----------------------------
 print("创建 ANUGA Domain...")
-domain:Domain = anuga.Domain(coords.tolist(), tris.tolist(),boundary=boundary)
+domain:Domain = anuga.Domain(coords.tolist(), tris.tolist())
 domain.set_name('DEM_Basin')
 domain.set_quantity('elevation', elevs)
 domain.set_quantity('friction', mannings_n)
