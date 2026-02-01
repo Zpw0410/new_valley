@@ -28,11 +28,17 @@
 
 *.cpg
 
+*.png
+
 *.prj
 
 *.dbf
 
+*1.py
+
 *.shx
+
+*.html
 
 *.sbn
 
