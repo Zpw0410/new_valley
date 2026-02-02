@@ -18,6 +18,7 @@ from flow_module import load_and_project_stations, create_inflow_regions, create
 from datetime import datetime, timedelta
 import re
 from mesh_build import build_mesh_from_ns_ne
+import json
 
 SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
 
@@ -32,8 +33,8 @@ yieldstep = 600
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
 start_time="20190310_010000"  # 模拟起始时间字符串，格式 YYYYMMDD_HHMMSS
-ns_path = "ns.txt"
-ne_path = "ne.txt"
+ns_path = "./90m/ns.txt"
+ne_path = "./90m/ne.txt"
 
 if os.path.exists(output_dir):
     try:
@@ -63,6 +64,7 @@ def parse_ymd_time(time_str):
 # -----------------------------
 # points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(str(REPROJECTED_DEM_FILE), output_dir=output_dir, ply_pre=True)
 # print(f'网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}')
+
 coords, tris, elevs ,boundary, tri_types= build_mesh_from_ns_ne(ns_path, ne_path)
 
 if coords.ndim == 3 and coords.shape[2] == 1:
@@ -74,6 +76,7 @@ if tris.ndim == 3 and tris.shape[2] == 1:
 # 2 创建 Domain
 # -----------------------------
 print("创建 ANUGA Domain...")
+tris = np.squeeze(tris)          # 把 (N,3,1) → (N,3)
 domain:Domain = anuga.Domain(coords.tolist(), tris.tolist())
 domain.set_name('DEM_Basin')
 domain.set_quantity('elevation', elevs)
@@ -138,9 +141,38 @@ for t in domain.evolve(yieldstep=yieldstep, finaltime=final_time):
 end_time = time.time()
 print(f"模拟完成，总耗时: {end_time - start_time:.1f}s")
 
+total_wallclock = end_time - start_time
+
 # -----------------------------
 # 5 保存结果
 # -----------------------------
 out_sww = os.path.join(output_dir, 'DEM_Basin.sww')
 domain.sww_merge(out_sww)
 print("完成，输出：", out_sww)
+
+
+# -----------------------------
+# 新增：计算并保存统计信息到 JSON
+# -----------------------------
+if step_count > 0:
+    avg_step_time = total_wallclock / step_count
+else:
+    avg_step_time = 0.0
+
+stats = {
+    "num_grid": domain.number_of_elements,
+    "total_simulation_time_seconds": round(total_wallclock, 2),
+    "average_time_per_step_seconds": round(avg_step_time, 4),
+    "step_count": step_count,
+    "final_time": final_time,
+    "yieldstep": yieldstep
+}
+
+json_path = os.path.join(output_dir, "simulation_stats.json")
+with open(json_path, 'w', encoding='utf-8') as f:
+    json.dump(stats, f, indent=2, ensure_ascii=False)
+
+print(f"模拟统计信息已保存至: {json_path}")
+print(f"  - 总模拟时长: {stats['total_simulation_time_seconds']} 秒")
+print(f"  - 平均单步耗时: {stats['average_time_per_step_seconds']} 秒")
+print(f"  - 总步数: {stats['step_count']}")
