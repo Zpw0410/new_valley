@@ -78,10 +78,13 @@ def read_geotiff(file_path):
     bounds = dataset.bounds
     # 过滤-9999后计算有效深度范围
     valid_data = data[(np.isfinite(data)) & (data != -9999) & (data != dataset.nodata if dataset.nodata is not None else True)]
+    # 过滤-9999后计算有效深度范围
+    valid_data = data[(np.isfinite(data)) & (data != -9999) & (data != dataset.nodata if dataset.nodata is not None else True)]
     print("data shape:", data.shape)
     print("transform:", transform)
     print("crs:", crs)
     print("bounds:", bounds)
+    print("有效深度值范围：最小值 =", np.min(valid_data) if len(valid_data) > 0 else "无有效数据", "最大值 =", np.max(valid_data) if len(valid_data) > 0 else "无有效数据")
     print("有效深度值范围：最小值 =", np.min(valid_data) if len(valid_data) > 0 else "无有效数据", "最大值 =", np.max(valid_data) if len(valid_data) > 0 else "无有效数据")
     return data, transform, crs, bounds, dataset
 
@@ -90,38 +93,36 @@ def generate_map(center, zoom_start=12):
     m = folium.Map(location=center, zoom_start=zoom_start, tiles='cartodbpositron')
     return m
 
-# 将 GeoTIFF 数据转为 HeatMap 格式（经纬度 + 归一化深度值，过滤-9999 和 浅水 <0.2m）
-def get_heat_data(data, dataset, shallow_threshold=0.2):
-    # 统一处理坐标系转换（包括crs为None的情况）
-    src_crs = "EPSG:32615" if dataset.crs is None else dataset.crs
-    if src_crs != 'EPSG:4326':
-        transformer = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+# 将 GeoTIFF 数据转为 HeatMap 格式（经纬度 + 归一化深度值，过滤-9999）
+def get_heat_data(data, dataset):
+    if dataset.crs != 'EPSG:4326' and dataset.crs is not None:
+        transformer = Transformer.from_crs(dataset.crs, "EPSG:4326", always_xy=True)
     else:
         transformer = None
 
+    # 第一步：收集所有有效深度值（过滤-9999、非数值、nodata）
     valid_values = []
-    temp_data = []  # (x, y, value)
-
+    temp_data = []  # 临时存储有效坐标和原始深度值
     for i in range(data.shape[0]):
         for j in range(data.shape[1]):
             x, y = dataset.xy(i, j)
             value = data[i, j]
-
-            if (np.isfinite(value)
-                and (dataset.nodata is None or value != dataset.nodata)
-                and value != -9999
-                and value >= shallow_threshold):           # ← 新增：过滤浅水区
-
+            # 核心修改：增加 value != -9999 判断，过滤无效深度值
+            if (np.isfinite(value) 
+                and (dataset.nodata is None or value != dataset.nodata) 
+                and value != -9999):
                 valid_values.append(value)
                 temp_data.append((x, y, value))
 
+    # 若无有效数据，直接返回空列表
     if not valid_values:
-        print("警告：无有效深度数据（过滤后为空）")
+        print("警告：无有效深度数据（所有值为-9999或无效值）")
         return []
 
+    # 第二步：归一化深度值到 0-1 区间（0=最浅，1=最深）
     min_val = np.min(valid_values)
     max_val = np.max(valid_values)
-
+    # 避免除零（所有深度值相同）
     if max_val == min_val:
         max_val = min_val + 1e-6
 
@@ -131,37 +132,33 @@ def get_heat_data(data, dataset, shallow_threshold=0.2):
             lon, lat = transformer.transform(x, y)
         else:
             lon, lat = x, y
+        # 归一化：越深值越接近1，越浅越接近0
+        normalized_val = (value - min_val) / (max_val - min_val)
+        heat_data.append([lat, lon, float(normalized_val)])
 
-        # 归一化：0.2m → 接近0（最浅蓝），最深 → 接近1（最深蓝）
-        normalized = (value - min_val) / (max_val - min_val)
-
-        heat_data.append([lat, lon, float(normalized)])
-
-    print(f"过滤后有效深度点数：{len(heat_data)} （已移除 < {shallow_threshold}m 的区域）")
     return heat_data
 
-# 添加热力图层（浅蓝 → 深蓝）
+# 添加热力图层（自定义蓝到红色带）
 def add_heatmap(m, heat_data):
-    if not heat_data:
+    if heat_data:
+        # 核心修改：自定义色带 gradient，0=蓝色（浅），1=深红色（深）
+        # 可根据需求调整中间过渡色的位置和颜色
+        heatmap = HeatMap(
+            heat_data,
+            radius=8,        # 热力点半径
+            blur=15,         # 模糊程度
+            gradient={       # 自定义色带：蓝→青→黄→橙→红→深红
+                0.0: 'blue',
+                0.2: 'cyan',
+                0.4: 'yellow',
+                0.6: 'orange',
+                0.8: 'red',
+                1.0: 'darkred'
+            }
+        )
+        heatmap.add_to(m)
+    else:
         print("警告：无有效热力数据，跳过添加热力图")
-        return
-
-    # 自定义蓝色渐变（从很浅的蓝到深蓝）
-    heatmap = HeatMap(
-        heat_data,
-        radius=8,          # 根据你数据分辨率可调 6~12
-        blur=15,           # 模糊程度，可调 10~20
-        max_zoom=18,
-        gradient={
-            # 0.0:  '#f7fbff',    # 极浅（接近白/透明感）
-            # 0.2:  '#deebf7',
-            0.0:  '#c6dbef',
-            0.4:  '#9ecae1',
-            0.7:  '#4292c6',
-            1.0:  '#08306b'     # 最深蓝
-        }
-    )
-    heatmap.add_to(m)
 
 # 繪製矩形（只有半透明填充，無邊框）
 def draw_rectangle(m, rect_bounds, fill_color='blue', fill_opacity=0.2):
@@ -308,6 +305,7 @@ def save_map_to_png_precise_crop(m, output_path, bounds_wgs84, dpi=300, keep_tem
     options.add_argument("--window-size=1600,1200")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
+    options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     # 新增：强制加载图片/瓦片
     options.add_argument("--enable-images")
@@ -327,29 +325,12 @@ def save_map_to_png_precise_crop(m, output_path, bounds_wgs84, dpi=300, keep_tem
 
     file_url = "file://" + os.path.abspath(tmp_html)
     driver.get(file_url)
-
-    # 智能等待瓦片加载
-    print("正在等待裁剪图瓦片加载完成...")
-    for _ in range(15):
-        check_script = """
-        var map = Object.values(window).find(obj => obj instanceof L.Map);
-        if (!map) return true;
-        var allTilesLoaded = true;
-        for (var layerId in map._layers) {
-            var layer = map._layers[layerId];
-            if (layer._tilesToLoad && layer._tilesToLoad > 0) {
-                allTilesLoaded = false;
-                break;
-            }
-        }
-        return allTilesLoaded;
-        """
-        if driver.execute_script(check_script):
-            break
-        time.sleep(1)
+    time.sleep(8)
 
     try:
         map_container = driver.find_element("css selector", "div.folium-map")
+        print("找到地图容器:", map_container.get_attribute("outerHTML")[:200])
+
         print("找到地图容器:", map_container.get_attribute("outerHTML")[:200])
 
         min_lon, min_lat, max_lon, max_lat = bounds_wgs84
@@ -363,6 +344,7 @@ def save_map_to_png_precise_crop(m, output_path, bounds_wgs84, dpi=300, keep_tem
         return {{
             left:   Math.round(Math.min(sw.x, ne.x)),
             top:    Math.round(Math.min(ne.y, sw.y)),
+            right:   Math.round(Math.max(ne.x, sw.x)),
             right:   Math.round(Math.max(ne.x, sw.x)),
             bottom: Math.round(Math.max(sw.y, ne.y))
         }};
@@ -394,152 +376,66 @@ def save_map_to_png_precise_crop(m, output_path, bounds_wgs84, dpi=300, keep_tem
 
     except Exception as e:
         print("截图/裁剪过程中出错:", str(e))
-        with open("debug_zoom_screenshot.png", "wb") as f:
+        with open("debug_full_screenshot.png", "wb") as f:
             f.write(base64.b64decode(png_base64))
         print("已保存裁剪调试图：debug_zoom_screenshot.png")
 
     finally:
         driver.quit()
-        # 新增：保留临时HTML供调试
-        if not keep_temp_html and os.path.exists(tmp_html):
-            os.remove(tmp_html)
-            print(f"已删除临时HTML文件：{tmp_html}")
-        else:
-            print(f"保留临时HTML文件供调试：{os.path.abspath(tmp_html)}")
-
-# --------------------------
-# 新增：定义离散分级规则（匹配论文图的色带）
-# --------------------------
-# 区间(最小值, 最大值) → 对应颜色（浅蓝到深蓝）
-depth_classes = [
-    (0.2, 1.0, '#c6dbef'),   # 浅蓝
-    (1.0, 2.0, '#9ecae1'),   # 中浅蓝
-    (2.0, 3.0, '#6baed6'),   # 中蓝
-    (3.0, 4.0, '#4292c6'),   # 中深蓝
-    (4.0, float('inf'), '#08306b')  # 最深蓝
-]
-
-# --------------------------
-# 新增：生成离散分级的栅格图像（无效区域透明）
-# --------------------------
-def create_discrete_raster(data, shallow_threshold=0.2, nodata_value=-9999):
-    """
-    將深度數據轉為離散分級的 RGBA PNG (無效區域完全透明)
-    """
-    height, width = data.shape
-    img = np.zeros((height, width, 4), dtype=np.uint8)
-
-    total_pixels = height * width
-    with tqdm(total=total_pixels, desc="生成離散分級圖層 (像素處理)", unit="px") as pbar:
-        for i in range(height):
-            for j in range(width):
-                value = data[i, j]
-                if (np.isfinite(value) and 
-                    value != nodata_value and 
-                    value >= shallow_threshold):
-                    
-                    for min_val, max_val, color in depth_classes:
-                        if min_val <= value < max_val:
-                            r = int(color.lstrip('#')[0:2], 16)
-                            g = int(color.lstrip('#')[2:4], 16)
-                            b = int(color.lstrip('#')[4:6], 16)
-                            img[i, j] = (r, g, b, 255)
-                            break
-                pbar.update(1)
-
-    # 轉 PNG base64
-    img_buffer = io.BytesIO()
-    Image.fromarray(img).save(img_buffer, format='PNG')
-    img_buffer.seek(0)
-    return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-
-
-# --------------------------
-# 替换：新增离散分级覆盖层（替代原热力图）
-# --------------------------
-def add_discrete_overlay(m, img_base64, bounds_wgs84):
-    """
-    添加离散分级的图像覆盖层（不透明、边缘分明）
-    """
-    folium.raster_layers.ImageOverlay(
-        image=f'data:image/png;base64,{img_base64}',
-        bounds=bounds_wgs84,  # 图像的地理范围（WGS84）
-        opacity=1.0,  # 完全不透明
-        interactive=False,
-        cross_origin=False,
-        zindex=1  # 确保在底图之上
-    ).add_to(m)
-
+        if os.path.exists(tmp_html):
+            os.remove(tmp_html)  # 清理临时HTML文件
 
 # 主函数
 def main(geotiff_path, dpi=300):
     data, transform, crs, bounds, dataset = read_geotiff(geotiff_path)
 
-    print("開始重投影到 EPSG:4326 ...")
-    data_4326, _, bounds_4326, _ = reproject_to_wgs84(
-        dataset, data,
-        target_crs="EPSG:4326",
-        resampling=Resampling.nearest
-    )
+    # 计算矩形区域（原始坐标系）
+    rect_left   = bounds.left   + (bounds.right  - bounds.left)  * 0.4
+    rect_right  = bounds.left   + (bounds.right  - bounds.left)  * 0.6
+    rect_bottom = bounds.bottom + (bounds.top    - bounds.bottom) * 0.4
+    rect_top    = bounds.bottom + (bounds.top    - bounds.bottom) * 0.6
 
-    min_lon, min_lat, max_lon, max_lat = bounds_4326
+    # 转换为 WGS84 经纬度
+    if crs != 'EPSG:4326' and crs is not None:
+        transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        r_left,  r_bottom  = transformer.transform(rect_left,  rect_bottom)
+        r_right, r_top     = transformer.transform(rect_right, rect_top)
+    else:
+        r_left, r_bottom, r_right, r_top = rect_left, rect_bottom, rect_right, rect_top
 
-    # 改用更清楚的變數名稱
-    full_width  = max_lon - min_lon
-    full_height = max_lat - min_lat
+    rectangle_bounds_wgs84 = [r_left, r_bottom, r_right, r_top]
 
-    # 矩形區域計算（中心 20% 寬度，向左偏移一個寬度）
-    rect_width   = full_width * 0.2
-    rect_height  = full_height * 0.2
+    # 计算地图中心（全图中心，WGS84）
+    if crs != 'EPSG:4326' and crs is not None:
+        min_lon, min_lat = transformer.transform(bounds.left, bounds.bottom)
+        max_lon, max_lat = transformer.transform(bounds.right, bounds.top)
+        center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
+    else:
+        center = [(bounds.bottom + bounds.top) / 2, (bounds.left + bounds.right) / 2]
 
-    rect_center_x = min_lon + full_width * 0.5
-    rect_center_y = min_lat + full_height * 0.5
+    # 准备热力图数据（已过滤-9999）
+    heat_data = get_heat_data(data, dataset)
 
-    rect_left   = rect_center_x - rect_width * 1.5   # 向左偏移一個 rect_width
-    rect_right  = rect_center_x - rect_width * 0.5
-    rect_bottom = rect_center_y - rect_height / 2
-    rect_top    = rect_center_y + rect_height / 2
-
-    rectangle_bounds_wgs84 = [rect_left, rect_bottom, rect_right, rect_top]
-    full_bounds_wgs84 = [[min_lat, min_lon], [max_lat, max_lon]]
-
-    center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-
-    print("開始生成離散分級圖層...")
-    img_base64 = create_discrete_raster(
-        data_4326,
-        shallow_threshold=0.2,
-        nodata_value=dataset.nodata if dataset.nodata is not None else -9999
-    )
-
-    # 全圖
-    m_full = generate_map(center, zoom_start=10)
-    add_discrete_overlay(m_full, img_base64, full_bounds_wgs84)
+    m_full = generate_map(center, zoom_start=10)  # 较小 zoom 以显示全图
+    add_heatmap(m_full, heat_data)
     draw_rectangle(m_full, rectangle_bounds_wgs84)
-    m_full.fit_bounds(full_bounds_wgs84)
-
-    save_folium_as_png_chrome(
-        m_full, "full_map_blue.png",
-        dpi=dpi, max_wait=25, bounds_wgs84=None, keep_temp_html=True
-    )
-
-    # 放大區域
-    zoom_center = [(rect_bottom + rect_top)/2, (rect_left + rect_right)/2]
-    m_zoom = generate_map(zoom_center, zoom_start=14)
-    add_discrete_overlay(m_zoom, img_base64, full_bounds_wgs84)
-    m_zoom.fit_bounds([[rect_bottom, rect_left], [rect_top, rect_right]])
-
+    # 可选：不缩放，让全图自然显示；或 m_full.fit_bounds(...) 如果想稍微放大
+    save_map_to_png(m_full, "full_map_with_rectangle.png", dpi=dpi, delay=8)
+    # 放大到矩形区域内部
+    m_zoom = generate_map([(r_bottom + r_top)/2, (r_left + r_right)/2], zoom_start=14)
+    add_heatmap(m_zoom, heat_data)  # 应用自定义色带的热力图
+    m_zoom.fit_bounds([[r_bottom, r_left], [r_top, r_right]])
+    
+    # 保存精确裁剪的图像
     save_map_to_png_precise_crop(
-        m_zoom, "zoomed_rectangle_cropped.png",
-        rectangle_bounds_wgs84, dpi=300, keep_temp_html=True
-    )
+            m_zoom,
+            "zoomed_rectangle_cropped.png",
+            rectangle_bounds_wgs84,
+            dpi=300
+        )
 
-    print("\n完成！生成檔案：")
-    print("  full_map_blue.png          → 全圖")
-    print("  zoomed_rectangle_cropped.png → 放大矩形區域裁切圖")
-    print("  temp_full_map.html / temp_zoom_map.html → 供檢查")
-
+    print("完成！生成图像：zoomed_rectangle_cropped.png（蓝到红色带，越深越红，已过滤-9999无效值）")
 
 if __name__ == "__main__":
-    geotiff_path = './selected_pictures/depth_0476.tif'
+    geotiff_path = 'depth_1440.tif'  # 替换为你的GeoTIFF路径
     main(geotiff_path, dpi=300)
