@@ -3,17 +3,19 @@ import os
 import numpy as np
 from netCDF4 import Dataset
 from osgeo import gdal
+import osgeo
 from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 # ================= 参数 =================
 SWW_FILE = "DEM_Basin.sww"
 OUT_DIR = "./depth2"
 BASE_RES = 45.0  # 目标分辨率（m）
 NODATA = -9999.0
-EPSILON = 1e-3 * BASE_RES  # 容差，用于检测直角
 # =======================================
 
-def main():
+def main(target_epsg: int):
     os.makedirs(OUT_DIR, exist_ok=True)
     
     # ---------- 1. 读取 SWW ----------
@@ -23,16 +25,16 @@ def main():
     stage = ds.variables["stage"]  # (Time, Nodes)
     elev = ds.variables["elevation"][:]
     volumes = ds.variables["volumes"][:]  # 每个三角形的三个顶点索引
-    depth = stage - elev  # 惰性计算
     ntime, nnode = stage.shape
     print(f"SWW nodes: {nnode}")
     print(f"Frames: {ntime}")
     
     # ---------- 2. 计算输出栅格范围 ----------
-    xmin, xmax = x.min(), x.max()
-    ymin, ymax = y.min(), y.max()
-    cols = int(np.ceil((xmax - xmin) / BASE_RES))
-    rows = int(np.ceil((ymax - ymin) / BASE_RES))
+    delta = BASE_RES / 2.0
+    xmin, xmax = x.min() - delta, x.max() + delta
+    ymin, ymax = y.min() - delta, y.max() + delta
+    cols = int(np.ceil((xmax - xmin) / BASE_RES) + 1.0)
+    rows = int(np.ceil((ymax - ymin) / BASE_RES) + 1.0)
     print(f"Output raster: {rows} x {cols} @ {BASE_RES}m")
     
     # ---------- 3. GeoTransform ----------
@@ -44,8 +46,12 @@ def main():
     
     # ---------- 4. 遍历每个时间步 ----------
     for t in tqdm(range(ntime), desc="Exporting depth"):
+        # Only output the last frame for testing
+        if t != ntime - 1:
+            continue
+        
         grid = np.full((rows, cols), NODATA, dtype=np.float32)
-        d = depth[t, :]
+        d = stage[t, :] - elev[:]
         d = np.maximum(d, 0.0)
         
         # 遍历每个三角形
@@ -55,37 +61,9 @@ def main():
             py = y[tri]  # [y1, y2, y3]
             pd = d[tri]  # [d1, d2, d3]
             
-            # 只处理等腰直角三角形（可选：如果你想处理所有三角形，可注释掉检测）
-            right_vertex = -1
-            for v in range(3):
-                v1 = (v + 1) % 3
-                v2 = (v + 2) % 3
-                vec1 = (px[v1] - px[v], py[v1] - py[v])
-                vec2 = (px[v2] - px[v], py[v2] - py[v])
-                len1 = np.sqrt(vec1[0]**2 + vec1[1]**2)
-                len2 = np.sqrt(vec2[0]**2 + vec2[1]**2)
-                dot = vec1[0] * vec2[0] + vec1[1] * vec2[1]
-                if abs(dot) < EPSILON and abs(len1 - len2) < EPSILON:
-                    right_vertex = v
-                    length = len1
-                    span = round(length / BASE_RES)
-                    if span not in [1, 2, 4]:
-                        right_vertex = -1
-                    break
-            
-            if right_vertex == -1:
-                continue  # 跳过非等腰直角三角形
-            
             # 计算栅格索引
-            cols_idx = [int((px[i] - xmin) / BASE_RES) for i in range(3)]
-            rows_idx = [int((ymax - py[i]) / BASE_RES) for i in range(3)]
-            
-            # 先填顶点（确保顶点精确）
-            for v in range(3):
-                r = rows_idx[v]
-                c = cols_idx[v]
-                if 0 <= r < rows and 0 <= c < cols:
-                    grid[r, c] = max(grid[r, c], pd[v]) if grid[r, c] != NODATA else pd[v]
+            cols_idx = [int((px[i] - xmin) / BASE_RES + 0.5) for i in range(3)]
+            rows_idx = [int((ymax - py[i]) / BASE_RES + 0.5) for i in range(3)]
             
             # ---------- 重心插值填充整个三角形 ----------
             # A, B, C 对应三个顶点（顺序不重要）
@@ -127,7 +105,13 @@ def main():
         # ---------- 5. 写 GeoTIFF ----------
         out_path = os.path.join(OUT_DIR, f"depth_{t:04d}.tif")
         ds_out = driver.Create(out_path, cols, rows, 1, gdal.GDT_Float32)
+        
+        # Set EPSG to target EPSG code
+        srs = osgeo.osr.SpatialReference()
+        srs.ImportFromEPSG(target_epsg)
+        ds_out.SetProjection(srs.ExportToWkt())
         ds_out.SetGeoTransform(geotransform)
+        
         band = ds_out.GetRasterBand(1)
         band.WriteArray(grid)
         band.SetNoDataValue(NODATA)
@@ -138,5 +122,5 @@ def main():
     ds.close()
     print("✅ Finished exporting depth GeoTIFFs")
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    main(32615)

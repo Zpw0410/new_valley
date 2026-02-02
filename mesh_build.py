@@ -6,7 +6,6 @@
 - 顶点去重时同步 remap boundary
 - 输出可直接用于 anuga.Domain 的 points / triangles / boundary
 """
-
 import numpy as np
 from typing import List, Dict, Tuple
 
@@ -41,7 +40,6 @@ class HydroSide:
         self.altitude = altitude
         self.type = type_
 
-        # ⭐ 正确的边界判定
         if self.direction == 2:  # 垂直边
             self.is_boundary = (left_grid_index == 0 or right_grid_index == 0)
         elif self.direction == 1:# 水平边
@@ -49,8 +47,6 @@ class HydroSide:
 
         self.cx = cx
         self.cy = cy
-
-
 
 def parse_ns_line(row: list) -> HydroSide:
     index = int(row[0])
@@ -90,8 +86,6 @@ def parse_ns_line(row: list) -> HydroSide:
         cy=cy
     )
 
-
-
 def load_ns_file(path: str) -> Dict[int, HydroSide]:
     side_map = {}
     with open(path, "r", encoding="utf-8") as f:
@@ -104,7 +98,6 @@ def load_ns_file(path: str) -> Dict[int, HydroSide]:
             s = parse_ns_line(row)
             side_map[s.index] = s
     return side_map
-
 
 # ============================================================
 # NE 相关
@@ -136,7 +129,6 @@ class HydroElement:
         min_x, min_y, max_x, max_y = self.bounds
         return ((min_x + max_x) / 2, (min_y + max_y) / 2, self.altitude)
 
-
 def parse_ne_line(row: list, side_map: Dict[int, HydroSide]) -> HydroElement:
     idx = 0
     index = int(row[idx]); idx += 1
@@ -167,11 +159,7 @@ def parse_ne_line(row: list, side_map: Dict[int, HydroSide]) -> HydroElement:
         cz, type_
     )
 
-
-# ============================================================
-# 修改 load_ne_file：忽略 altitude==-9999 的元素
-# ============================================================
-
+# Ignore elements with altitude == -9999
 def load_ne_file(path: str, side_map: Dict[int, HydroSide]) -> List[HydroElement]:
     elems = []
     with open(path, "r", encoding="utf-8") as f:
@@ -187,15 +175,12 @@ def load_ne_file(path: str, side_map: Dict[int, HydroSide]) -> List[HydroElement
             elems.append(elem)
     return elems
 
-
-
 # ============================================================
 # 三角化 + boundary 生成（核心）
 # ============================================================
 
 def tri_area(a, b, c):
     return abs((b[0]-a[0])*(c[1]-a[1]) - (c[0]-a[0])*(b[1]-a[1])) / 2
-
 
 def elements_to_triangles(elements: List[HydroElement], side_map: Dict[int, HydroSide]):
     """
@@ -206,8 +191,8 @@ def elements_to_triangles(elements: List[HydroElement], side_map: Dict[int, Hydr
       tri_boundary_flags: List[dict] 与 triangles 一一对应，dict: edge_id -> tag (例如 'ocean')
       triangle_types
     """
-    points: List[Tuple[float, float]] = []
     elevations: List[float] = []
+    points: List[Tuple[float, float]] = []
     triangles: List[Tuple[int, int, int]] = []
     tri_boundary_flags: List[Dict[int, str]] = []
     triangle_types: List[int] = []
@@ -413,7 +398,6 @@ def elements_to_triangles(elements: List[HydroElement], side_map: Dict[int, Hydr
     # 打印统计
     print(f"总共过滤掉了 {filtered_edges_count} 条边（按检查次数计数）")
     return points, triangles, elevations, tri_boundary_flags,triangle_types
-
 
 # ============================================================
 # 去重 + boundary remap

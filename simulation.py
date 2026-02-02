@@ -27,7 +27,6 @@ SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
 output_dir = 'anuga_output'
 os.makedirs(output_dir, exist_ok=True)
 
-rain_intensity = 0.005  # m/s
 final_time = 86400 * 10  # 模拟总时间，单位秒（这里为 10 天）
 yieldstep = 600
 mannings_n = 0.03
