@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import re
 from mesh_build import build_mesh_from_ns_ne
 
-SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
+SIMULATION_IN_PARALLEL = True  # 设置为 True 可启用并行计算
 
 # -----------------------------
 # 用户参数
@@ -27,9 +27,8 @@ SIMULATION_IN_PARALLEL = False  # 设置为 True 可启用并行计算
 output_dir = 'anuga_output'
 os.makedirs(output_dir, exist_ok=True)
 
-rain_intensity = 0.005  # m/s
-final_time = 86400
-yieldstep = 300
+final_time = 86400 * 10  # 模拟总时间，单位秒（这里为 10 天）
+yieldstep = 600
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
 start_time="20190310_010000"  # 模拟起始时间字符串，格式 YYYYMMDD_HHMMSS
@@ -65,6 +64,11 @@ def parse_ymd_time(time_str):
 # points, points_lonlat, elements, boundary, elev_points = generate_mesh_from_dem(str(REPROJECTED_DEM_FILE), output_dir=output_dir, ply_pre=True)
 # print(f'网格顶点数: {points.shape[0]}, 三角形数: {elements.shape[0]}')
 coords, tris, elevs ,boundary, tri_types= build_mesh_from_ns_ne(ns_path, ne_path)
+
+if coords.ndim == 3 and coords.shape[2] == 1:
+    coords = coords.reshape(-1, 2)
+if tris.ndim == 3 and tris.shape[2] == 1:
+    tris = tris.reshape(-1, 3)
 
 # -----------------------------
 # 2 创建 Domain
