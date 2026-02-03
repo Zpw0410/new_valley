@@ -35,35 +35,36 @@ def generate_map(center, zoom_start=12):
     return m
 
 # 将 GeoTIFF 数据转为 HeatMap 格式（经纬度 + 归一化深度值，过滤-9999）
-def get_heat_data(data, dataset):
+# 将 GeoTIFF 数据转为 HeatMap 格式（经纬度 + 归一化深度值，过滤-9999 和 浅水 <0.2m）
+def get_heat_data(data, dataset, shallow_threshold=0.2):
     if dataset.crs != 'EPSG:4326' and dataset.crs is not None:
         transformer = Transformer.from_crs(dataset.crs, "EPSG:4326", always_xy=True)
     else:
         transformer = None
 
-    # 第一步：收集所有有效深度值（过滤-9999、非数值、nodata）
     valid_values = []
-    temp_data = []  # 临时存储有效坐标和原始深度值
+    temp_data = []  # (x, y, value)
+
     for i in range(data.shape[0]):
         for j in range(data.shape[1]):
             x, y = dataset.xy(i, j)
             value = data[i, j]
-            # 核心修改：增加 value != -9999 判断，过滤无效深度值
-            if (np.isfinite(value) 
-                and (dataset.nodata is None or value != dataset.nodata) 
-                and value != -9999):
+
+            if (np.isfinite(value)
+                and (dataset.nodata is None or value != dataset.nodata)
+                and value != -9999
+                and value >= shallow_threshold):           # ← 新增：过滤浅水区
+
                 valid_values.append(value)
                 temp_data.append((x, y, value))
 
-    # 若无有效数据，直接返回空列表
     if not valid_values:
-        print("警告：无有效深度数据（所有值为-9999或无效值）")
+        print("警告：无有效深度数据（过滤后为空）")
         return []
 
-    # 第二步：归一化深度值到 0-1 区间（0=最浅，1=最深）
     min_val = np.min(valid_values)
     max_val = np.max(valid_values)
-    # 避免除零（所有深度值相同）
+
     if max_val == min_val:
         max_val = min_val + 1e-6
 
@@ -73,39 +74,56 @@ def get_heat_data(data, dataset):
             lon, lat = transformer.transform(x, y)
         else:
             lon, lat = x, y
-        # 归一化：越深值越接近1，越浅越接近0
-        normalized_val = (value - min_val) / (max_val - min_val)
-        heat_data.append([lat, lon, float(normalized_val)])
 
+        # 归一化：0.2m → 接近0（最浅蓝），最深 → 接近1（最深蓝）
+        normalized = (value - min_val) / (max_val - min_val)
+
+        heat_data.append([lat, lon, float(normalized)])
+
+    print(f"过滤后有效深度点数：{len(heat_data)} （已移除 < {shallow_threshold}m 的区域）")
     return heat_data
 
 # 添加热力图层（自定义蓝到红色带）
+# 添加热力图层（浅蓝 → 深蓝）
 def add_heatmap(m, heat_data):
-    if heat_data:
-        # 核心修改：自定义色带 gradient，0=蓝色（浅），1=深红色（深）
-        # 可根据需求调整中间过渡色的位置和颜色
-        heatmap = HeatMap(
-            heat_data,
-            radius=8,        # 热力点半径
-            blur=15,         # 模糊程度
-            gradient={       # 自定义色带：蓝→青→黄→橙→红→深红
-                0.0: 'blue',
-                0.2: 'cyan',
-                0.4: 'yellow',
-                0.6: 'orange',
-                0.8: 'red',
-                1.0: 'darkred'
-            }
-        )
-        heatmap.add_to(m)
-    else:
+    if not heat_data:
         print("警告：无有效热力数据，跳过添加热力图")
+        return
 
-# 绘制矩形（蓝色半透明框）
-def draw_rectangle(m, rect_bounds, color='blue', fill_opacity=0.2):
+    # 自定义蓝色渐变（从很浅的蓝到深蓝）
+    heatmap = HeatMap(
+        heat_data,
+        radius=8,          # 根据你数据分辨率可调 6~12
+        blur=15,           # 模糊程度，可调 10~20
+        max_zoom=18,
+        gradient={
+            0.0:  '#f7fbff',    # 极浅（接近白/透明感）
+            0.2:  '#deebf7',
+            0.4:  '#c6dbef',
+            0.6:  '#9ecae1',
+            0.8:  '#4292c6',
+            1.0:  '#08306b'     # 最深蓝
+        }
+    )
+    heatmap.add_to(m)
+
+# 繪製矩形（只有半透明填充，無邊框）
+def draw_rectangle(m, rect_bounds, fill_color='blue', fill_opacity=0.2):
+    """
+    參數:
+        rect_bounds: [min_lon, min_lat, max_lon, max_lat]
+        fill_color:   填充顏色（支援 hex、顏色名稱等）
+        fill_opacity: 填充透明度 (0.0 ~ 1.0)
+    """
     folium.Rectangle(
-        bounds=[[rect_bounds[1], rect_bounds[0]], [rect_bounds[3], rect_bounds[2]]],
-        color=color, fill=True, fill_opacity=fill_opacity
+        bounds=[[rect_bounds[1], rect_bounds[0]],   # [min_lat, min_lon]
+                [rect_bounds[3], rect_bounds[2]]],  # [max_lat, max_lon]
+        color='transparent',          # 邊框顏色設為透明
+        fill=True,
+        fill_color=fill_color,        # 填充顏色
+        fill_opacity=fill_opacity,
+        weight=0,                     # 邊框粗細設為 0（最重要！）
+        # 可選：line_opacity=0.0      # 有些版本也支援，但 weight=0 通常已足夠
     ).add_to(m)
 
 # 保存 folium 地图为高分辨率 PNG
@@ -224,7 +242,7 @@ def main(geotiff_path, dpi=300):
     heat_data = get_heat_data(data, dataset)
 
     m_full = generate_map(center, zoom_start=10)  # 较小 zoom 以显示全图
-    add_heatmap(m_full, heat_data)
+    # add_heatmap(m_full, heat_data)
     draw_rectangle(m_full, rectangle_bounds_wgs84)
     # 可选：不缩放，让全图自然显示；或 m_full.fit_bounds(...) 如果想稍微放大
     save_map_to_png(m_full, "full_map_with_rectangle.png", dpi=dpi, delay=8)

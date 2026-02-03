@@ -91,7 +91,7 @@ domain.set_boundary({
     # 'right': anuga.Reflective_boundary(domain),
     # 'top': anuga.Reflective_boundary(domain),
     # 'bottom': anuga.Reflective_boundary(domain),
-    'exterior': anuga.Reflective_boundary(domain),
+    'exterior': anuga.Transmissive_boundary(domain),
 })
 
 # -----------------------------
