@@ -137,13 +137,13 @@ def get_heat_data(data, dataset):
         normalized_val = (value - min_val) / (max_val - min_val)
         heat_data.append([lat, lon, float(normalized_val)])
 
-            value = data[i, j]
-            # 核心修改：增加 value != -9999 判断，过滤无效深度值
-            if (np.isfinite(value) 
-                and (dataset.nodata is None or value != dataset.nodata) 
-                and value != -9999):
-                valid_values.append(value)
-                temp_data.append((x, y, value))
+        value = data[i, j]
+        # 核心修改：增加 value != -9999 判断，过滤无效深度值
+        if (np.isfinite(value) 
+            and (dataset.nodata is None or value != dataset.nodata) 
+            and value != -9999):
+            valid_values.append(value)
+            temp_data.append((x, y, value))
 
     # 若无有效数据，直接返回空列表
     if not valid_values:
@@ -269,7 +269,7 @@ def save_folium_as_png_chrome(
 
         if not tile_loaded:
             print(f"警告：超过{max_wait}秒，瓦片仍未完全加载（可能是网络问题）")
-
+         
         if bounds_wgs84 is not None:
             # 精确裁剪模式
             min_lon, min_lat, max_lon, max_lat = bounds_wgs84
