@@ -33,8 +33,8 @@ yieldstep = 600
 mannings_n = 0.03
 print_interval = 60  # 每 60s 打印一次信息
 start_time="20190310_010000"  # 模拟起始时间字符串，格式 YYYYMMDD_HHMMSS
-ns_path = "./90m/ns.txt"
-ne_path = "./90m/ne.txt"
+ns_path = "./45-90m/ns.txt"
+ne_path = "./45-90m/ne.txt"
 
 if os.path.exists(output_dir):
     try:
@@ -107,7 +107,7 @@ print("降雨算子已添加到 Domain")
 # 5 入流算子
 # -----------------------------
 stations, station_ids = load_and_project_stations()
-regions = create_inflow_regions(domain, stations, station_ids, radius=90.0)  # 调整 radius
+regions = create_inflow_regions(domain, stations, station_ids, radius=45.0)  # 调整 radius
 inlet_ops = create_inlet_operators(domain, regions, station_ids, start_time=start_time)
 
 print("入流算子已添加到 Domain")
